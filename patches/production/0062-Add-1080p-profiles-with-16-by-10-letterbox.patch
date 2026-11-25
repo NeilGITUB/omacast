@@ -1,0 +1,438 @@
+From a4a8e65fd74e4332d1c56634ada049cc3a327448 Mon Sep 17 00:00:00 2001
+From: Omacast package build <packaging@localhost>
+Date: Wed, 25 Nov 2026 21:04:04 +0000
+Subject: [PATCH] Add 1080p profiles with 16:10 letterbox
+
+Accept 1920x1080 at 60 and 30 fps beside the Safe 720p launch, fall back
+to 1080p30 when a sink advertises that mode and refuses 60, and pad a
+non-16:9 panel to a true 1920x1080 frame.
+---
+ src/main.py                    |  19 ++++--
+ src/wfd/encoding.py            |  20 +++++++
+ src/wfd/media/wlroots.py       |  56 +++++++++++++++++-
+ src/wfd/modes.py               |  26 ++++++---
+ tests/test_omacast_contract.py |  16 ++++-
+ tests/test_wfd_hd_profile.py   |  51 ++++++++++++++++
+ tests/test_wfd_media_vaapi.py  | 104 +++++++++++++++++++++++++++++++++
+ 7 files changed, 277 insertions(+), 15 deletions(-)
+ create mode 100644 tests/test_wfd_hd_profile.py
+
+diff --git a/src/main.py b/src/main.py
+index 3e1bc26..2ad2f08 100644
+--- a/src/main.py
++++ b/src/main.py
+@@ -85,13 +85,19 @@ def _validate_omacast_session(args: argparse.Namespace) -> None:
+     if args.wfd_progress_log == args.wfd_latency_log:
+         raise WFDNotReady("Progress and latency outputs must be distinct.")
+     exact = {
+-        "protocol": "wfd", "output_res": "1280x720", "fps": 60,
+-        "bitrate": "7M", "wfd_capture_backend": "gpu-screen-recorder",
++        "protocol": "wfd", "wfd_capture_backend": "gpu-screen-recorder",
+         "wfd_p2p_backend": "supplicant", "wfd_supplicant_mode": "connect",
+         "wfd_no_firewall": True,
+     }
++    supported_profiles = {
++        ("1280x720", 60, "7M"),
++        ("1920x1080", 60, "14M"),
++        ("1920x1080", 30, "8M"),
++    }
+     if any(getattr(args, name) != value for name, value in exact.items()):
+-        raise WFDNotReady("The launch is outside Omacast's supported Safe profile.")
++        raise WFDNotReady("The launch is outside Omacast's supported profiles.")
++    if (args.output_res, args.fps, args.bitrate) not in supported_profiles:
++        raise WFDNotReady("The launch is outside Omacast's supported profiles.")
+     for value, label in (
+         (args.wfd_interface, "Wi-Fi interface"),
+         (args.monitor_name, "monitor"),
+@@ -125,9 +131,14 @@ def main() -> None:
+         print(json.dumps({
+             "schemaVersion": 1,
+             "kind": "omacast-engine-contract",
+-            "apiRevision": 3,
++            "apiRevision": 4,
+             "capture": "gpu-screen-recorder",
+             "profile": {"width": 1280, "height": 720, "fps": 60, "bitrateMbps": 7},
++            "profiles": [
++                {"id": "safe", "width": 1280, "height": 720, "fps": 60, "bitrateMbps": 7},
++                {"id": "hd1080", "width": 1920, "height": 1080, "fps": 60, "bitrateMbps": 14},
++                {"id": "hd1080p30", "width": 1920, "height": 1080, "fps": 30, "bitrateMbps": 8},
++            ],
+             "network": {
+                 "backend": "supplicant", "mode": "connect",
+                 "guardedSessionRequired": True,
+diff --git a/src/wfd/encoding.py b/src/wfd/encoding.py
+index 38ed11d..5af66d1 100644
+--- a/src/wfd/encoding.py
++++ b/src/wfd/encoding.py
+@@ -12,6 +12,26 @@ def _parse_resolution(value: Optional[str]) -> Optional[tuple[int, int]]:
+         return None
+     return int(match.group(1)), int(match.group(2))
+ 
++def _gsr_fitted_size(src_w: int, src_h: int, out_w: int, out_h: int) -> tuple[int, int]:
++    """Match gpu-screen-recorder's truncating aspect-fit for ``-s``.
++
++    ``-s WxH`` is a limit, not a canvas. A 2880x1800 panel limited to
++    1920x1080 becomes 1728x1080; the caller pads back to the WFD frame.
++    """
++    if src_w <= 0 or src_h <= 0 or out_w <= 0 or out_h <= 0:
++        return max(out_w, 0), max(out_h, 0)
++    width = out_w
++    height = int(width * (src_h / src_w))
++    if height > out_h:
++        height = out_h
++        width = int(height * (src_w / src_h)) if src_h else 0
++    if width < 1:
++        width = 1
++    if height < 1:
++        height = 1
++    return width, height
++
++
+ def _fit_inside(src_w: int, src_h: int, out_w: int, out_h: int) -> tuple[int, int]:
+     """Fit src's aspect ratio inside out_w x out_h. Width stays a multiple of 8
+     so GStreamer leaves the I420 strides unpadded and a raw frame is exactly
+diff --git a/src/wfd/media/wlroots.py b/src/wfd/media/wlroots.py
+index 38200f5..1dae066 100644
+--- a/src/wfd/media/wlroots.py
++++ b/src/wfd/media/wlroots.py
+@@ -1,10 +1,11 @@
+ import shutil
+ import subprocess
+ import time
++from pathlib import Path
+ 
+ from ..config import WFDNotReady
+ from ..encoding import (
+-    _bitrate_to_kbits, _calculate_gop, _kbits_to_bitrate_text,
++    _bitrate_to_kbits, _calculate_gop, _gsr_fitted_size, _kbits_to_bitrate_text,
+     _parse_resolution, _quality_floor_kbits,
+ )
+ from ..env import _detect_audio_monitor
+@@ -13,6 +14,12 @@ from ..net import _ffmpeg_sender_args
+ from ..progress import _start_ffmpeg_progress_drain
+ 
+ 
++def _vaapi_render_node() -> str | None:
++    """First DRM render node, chosen by capability rather than a fixed path."""
++    nodes = sorted(path for path in Path("/dev/dri").glob("renderD*") if path.is_char_device())
++    return str(nodes[0]) if nodes else None
++
++
+ def _stop_startup_process(proc: subprocess.Popen[bytes]) -> None:
+     """Best-effort bounded cleanup without hiding the startup failure."""
+     try:
+@@ -88,14 +95,59 @@ class WlrootsMixin:
+         ]
+ 
+         progress_target = "pipe:2" if self.config.progress_log_path else None
++        # Safe 720p keeps the single GSR encode and stream copy. 1080p on a
++        # non-16:9 panel is different: gpu-screen-recorder's -s limit shrinks
++        # the frame (2880x1800 -> 1728x1080) instead of padding. Decode that
++        # fitted picture once and pad it to the negotiated 1920x1080 canvas.
++        fitted = _gsr_fitted_size(monitor.width, monitor.height, parsed_out[0], parsed_out[1])
++        pad_to_frame = parsed_out == (1920, 1080) and fitted != parsed_out
++        pad_encoder = None
++        vaapi_device = None
++        if pad_to_frame and self.config.video_encoder == "vaapi":
++            vaapi_device = _vaapi_render_node()
++            pad_encoder = "h264_vaapi" if vaapi_device else "libx264"
++            if vaapi_device is None:
++                print("[FluxCast WFD Media] No render node; letterbox will use libx264.")
++        elif pad_to_frame:
++            pad_encoder = "libx264"
+         ffmpeg_cmd = [
+             *_ffmpeg_sender_args(self.config.ffmpeg_stats, progress_target),
++        ]
++        if vaapi_device is not None:
++            ffmpeg_cmd += ["-vaapi_device", vaapi_device]
++        ffmpeg_cmd += [
+             "-fflags", "+genpts",
+             "-f", "matroska",
+             "-i", "pipe:0",
+             "-map", "0:v:0",
+-            "-c:v", "copy",
+         ]
++        if pad_encoder is None:
++            ffmpeg_cmd += ["-c:v", "copy"]
++        else:
++            pad_x = (parsed_out[0] - fitted[0]) // 2
++            pad_y = (parsed_out[1] - fitted[1]) // 2
++            video_filter = (
++                f"pad={parsed_out[0]}:{parsed_out[1]}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1"
++            )
++            if pad_encoder == "h264_vaapi":
++                video_filter += ",format=nv12,hwupload"
++            ffmpeg_cmd += ["-vf", video_filter, "-c:v", pad_encoder, "-profile:v", profile, "-level:v", _h264_level_for_mode(self.config)]
++            if pad_encoder == "libx264":
++                ffmpeg_cmd += ["-preset", "veryfast", "-tune", "zerolatency", "-pix_fmt", "yuv420p"]
++            else:
++                ffmpeg_cmd += ["-rc_mode", "CBR", "-aud", "1"]
++            ffmpeg_cmd += [
++                "-bf", "0",
++                "-g", str(gop),
++                "-keyint_min", str(gop),
++                "-b:v", effective_bitrate,
++                "-maxrate", effective_bitrate,
++            ]
++            print(
++                "[FluxCast WFD Media] Letterbox        : "
++                f"{fitted[0]}x{fitted[1]} inside {out_res} "
++                f"({pad_x} px horizontal, {pad_y} px vertical)"
++            )
+ 
+         if not self.config.no_audio:
+             ffmpeg_cmd += [
+diff --git a/src/wfd/modes.py b/src/wfd/modes.py
+index 1faccee..056f0ab 100644
+--- a/src/wfd/modes.py
++++ b/src/wfd/modes.py
+@@ -125,20 +125,30 @@ def _choose_cea_mode(
+     # Android sinks advertise only the mandatory 720p30 bit while accepting
+     # 720p60 and 1080p30/60. Preserve the requested stress/quality mode so the
+     # caller can measure it instead of silently testing a lower workload.
+-    requested_bit = None
+     if resolution == (1280, 720):
+         requested_bit = WFD_CEA_720P60 if wants_60 else WFD_CEA_720P30
++    elif resolution == (1920, 1080) and wants_60 and not supports(WFD_CEA_1080P60) and supports(WFD_CEA_1080P30):
++        # The sink can take 1080p but not 60 fps. Capture starts from this
++        # mode, so the encoded stream is 1920x1080p30 instead of a refused 60.
++        if not _mode_force_warned:
++            _mode_force_warned = True
++            print(
++                "[FluxCast WFD RTSP] WARNING: Sink does not accept "
++                "1920x1080p60; falling back to 1920x1080p30."
++            )
++        return WFD_CEA_MODES[WFD_CEA_1080P30]
+     elif resolution == (1920, 1080):
+         requested_bit = WFD_CEA_1080P60 if wants_60 else WFD_CEA_1080P30
++    else:
++        requested_bit = None
+     if requested_bit is not None:
+         mode = WFD_CEA_MODES[requested_bit]
+-        if not supports(requested_bit):
+-            if not _mode_force_warned:
+-                _mode_force_warned = True
+-                print(
+-                    f"[FluxCast WFD RTSP] WARNING: Sink does not advertise "
+-                    f"{mode.name}; forcing the explicitly requested mode."
+-                )
++        if not supports(requested_bit) and not _mode_force_warned:
++            _mode_force_warned = True
++            print(
++                f"[FluxCast WFD RTSP] WARNING: Sink does not advertise "
++                f"{mode.name}; forcing the explicitly requested mode."
++            )
+         return mode
+ 
+     # Build preference order: if monitor is 1200p, prefer VESA 1200p modes first
+diff --git a/tests/test_omacast_contract.py b/tests/test_omacast_contract.py
+index ce05226..1cbc07a 100644
+--- a/tests/test_omacast_contract.py
++++ b/tests/test_omacast_contract.py
+@@ -46,6 +46,15 @@ class GuardedLaunchContractTest(unittest.TestCase):
+         with mock.patch("main.os.getppid", return_value=os.getpid()):
+             main._validate_omacast_session(self.parse())
+ 
++    def test_hd1080_profiles_are_accepted_and_other_modes_are_not(self):
++        with mock.patch("main.os.getppid", return_value=os.getpid()):
++            main._validate_omacast_session(self.parse("--output-res", "1920x1080", "--fps", "60", "--bitrate", "14M"))
++            main._validate_omacast_session(self.parse("--output-res", "1920x1080", "--fps", "30", "--bitrate", "8M"))
++            with self.assertRaisesRegex(WFDNotReady, "supported profiles"):
++                main._validate_omacast_session(self.parse("--output-res", "1920x1080", "--fps", "60", "--bitrate", "7M"))
++            with self.assertRaisesRegex(WFDNotReady, "supported profiles"):
++                main._validate_omacast_session(self.parse("--output-res", "1920x1080", "--fps", "24", "--bitrate", "8M"))
++
+     def test_unguarded_stream_is_rejected(self):
+         with mock.patch.object(sys, "argv", ["fluxcast"]):
+             args = main.parse_args()
+@@ -84,9 +93,14 @@ class GuardedLaunchContractTest(unittest.TestCase):
+         self.assertEqual(json.loads(output.getvalue()), {
+             "schemaVersion": 1,
+             "kind": "omacast-engine-contract",
+-            "apiRevision": 3,
++            "apiRevision": 4,
+             "capture": "gpu-screen-recorder",
+             "profile": {"width": 1280, "height": 720, "fps": 60, "bitrateMbps": 7},
++            "profiles": [
++                {"id": "safe", "width": 1280, "height": 720, "fps": 60, "bitrateMbps": 7},
++                {"id": "hd1080", "width": 1920, "height": 1080, "fps": 60, "bitrateMbps": 14},
++                {"id": "hd1080p30", "width": 1920, "height": 1080, "fps": 30, "bitrateMbps": 8},
++            ],
+             "network": {
+                 "backend": "supplicant", "mode": "connect",
+                 "guardedSessionRequired": True,
+diff --git a/tests/test_wfd_hd_profile.py b/tests/test_wfd_hd_profile.py
+new file mode 100644
+index 0000000..fe095b4
+--- /dev/null
++++ b/tests/test_wfd_hd_profile.py
+@@ -0,0 +1,51 @@
++import unittest
++
++from wfd.config import WFDMediaConfig, WFDVideoFormat
++from wfd.constants import WFD_CEA_1080P30, WFD_CEA_1080P60, WFD_CEA_720P30
++from wfd.encoding import _gsr_fitted_size
++from wfd.modes import _choose_cea_mode, _h264_level_for_mode, _selected_video_format
++
++
++def _sink(cea_mask: int, level: str = "1f") -> WFDVideoFormat:
++    return WFDVideoFormat(
++        native="00", preferred="00", profile="01", level=level,
++        cea_mask=cea_mask, vesa_mask=0, hh_mask=0,
++    )
++
++
++class HDProfileTest(unittest.TestCase):
++    def test_16_by_10_panel_fits_1728x1080_with_96px_side_bars(self):
++        fitted = _gsr_fitted_size(2880, 1800, 1920, 1080)
++        self.assertEqual(fitted, (1728, 1080))
++        self.assertEqual((1920 - fitted[0]) // 2, 96)
++        self.assertEqual((1080 - fitted[1]) // 2, 0)
++
++    def test_h264_level_matches_the_1080p_mode(self):
++        self.assertEqual(_h264_level_for_mode(WFDMediaConfig(monitor=None, output_resolution="1280x720", fps=60)), "3.2")
++        self.assertEqual(_h264_level_for_mode(WFDMediaConfig(monitor=None, output_resolution="1920x1080", fps=60)), "4.2")
++        self.assertEqual(_h264_level_for_mode(WFDMediaConfig(monitor=None, output_resolution="1920x1080", fps=30)), "4.0")
++
++    def test_1080p60_falls_back_when_the_sink_accepts_only_30(self):
++        config = WFDMediaConfig(monitor=None, output_resolution="1920x1080", fps=60)
++        mode = _choose_cea_mode(config, _sink(WFD_CEA_1080P30 | WFD_CEA_720P30))
++        self.assertEqual(mode.name, "1920x1080p30")
++        selected = _selected_video_format(config, _sink(WFD_CEA_1080P30 | WFD_CEA_720P30))
++        self.assertIn(f"{WFD_CEA_1080P30:08x}", selected)
++        self.assertIn(" 04 ", selected)
++
++    def test_1080p60_is_kept_when_the_sink_under_advertises(self):
++        config = WFDMediaConfig(monitor=None, output_resolution="1920x1080", fps=60)
++        mode = _choose_cea_mode(config, _sink(WFD_CEA_720P30))
++        self.assertEqual(mode.name, "1920x1080p60")
++        selected = _selected_video_format(config, _sink(WFD_CEA_1080P60 | WFD_CEA_1080P30))
++        self.assertIn(f"{WFD_CEA_1080P60:08x}", selected)
++        self.assertIn(" 10 ", selected)
++
++    def test_explicit_1080p30_negotiates_that_mode(self):
++        config = WFDMediaConfig(monitor=None, output_resolution="1920x1080", fps=30)
++        mode = _choose_cea_mode(config, _sink(WFD_CEA_1080P60 | WFD_CEA_1080P30))
++        self.assertEqual(mode.name, "1920x1080p30")
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_wfd_media_vaapi.py b/tests/test_wfd_media_vaapi.py
+index 89cafef..76e0668 100644
+--- a/tests/test_wfd_media_vaapi.py
++++ b/tests/test_wfd_media_vaapi.py
+@@ -67,6 +67,110 @@ class WlrootsVAAPITest(unittest.TestCase):
+             "&bitrate=9000000&burst_bits=42496&dscp=34",
+         )
+ 
++    def test_1080p60_on_a_16_by_10_panel_pads_to_a_true_frame(self):
++        config = WFDMediaConfig(
++            monitor=SimpleNamespace(name="eDP-1", width=2880, height=1800),
++            output_resolution="1920x1080",
++            fps=60,
++            bitrate="14M",
++            no_audio=True,
++            capture_backend="gpu-screen-recorder",
++            video_encoder="vaapi",
++        )
++        pipeline = WFDMediaPipeline(
++            config, tv_ip="192.168.49.2", local_ip="192.168.49.1", sink_rtp_port=19000,
++        )
++        commands = []
++
++        def popen(command, *args, **kwargs):
++            commands.append(command)
++            return _Process(with_stdout=kwargs.get("stdout") is not None)
++
++        with mock.patch("wfd.media.wlroots.shutil.which", return_value="/usr/bin/gpu-screen-recorder"), \
++             mock.patch("wfd.media.wlroots._detect_audio_monitor", return_value="monitor"), \
++             mock.patch("wfd.media.wlroots._vaapi_render_node", return_value="/dev/dri/renderD128"), \
++             mock.patch("wfd.media.wlroots.subprocess.Popen", side_effect=popen), \
++             mock.patch("wfd.media.wlroots.time.sleep"):
++            pipeline._start_desktop_gpu_screen_recorder()
++
++        capture, ffmpeg = commands
++        self.assertEqual(capture[capture.index("-s") + 1], "1920x1080")
++        self.assertEqual(capture[capture.index("-f") + 1], "60")
++        self.assertEqual(capture[capture.index("-w") + 1], "eDP-1")
++        video_options = capture[capture.index("-ffmpeg-video-opts") + 1]
++        self.assertIn("profile=constrained_baseline;level=42;", video_options)
++        self.assertEqual(ffmpeg[ffmpeg.index("-vaapi_device") + 1], "/dev/dri/renderD128")
++        self.assertEqual(
++            ffmpeg[ffmpeg.index("-vf") + 1],
++            "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,format=nv12,hwupload",
++        )
++        self.assertEqual(ffmpeg[ffmpeg.index("-c:v") + 1], "h264_vaapi")
++        self.assertEqual(ffmpeg[ffmpeg.index("-level:v") + 1], "4.2")
++        self.assertNotIn("copy", ffmpeg[:ffmpeg.index("-c:v") + 2])
++
++    def test_1080p30_letterbox_uses_level_4_0(self):
++        config = WFDMediaConfig(
++            monitor=SimpleNamespace(name="eDP-1", width=2880, height=1800),
++            output_resolution="1920x1080",
++            fps=30,
++            bitrate="8M",
++            no_audio=True,
++            capture_backend="gpu-screen-recorder",
++            video_encoder="libx264",
++        )
++        pipeline = WFDMediaPipeline(
++            config, tv_ip="192.168.49.2", local_ip="192.168.49.1", sink_rtp_port=19000,
++        )
++        commands = []
++
++        def popen(command, *args, **kwargs):
++            commands.append(command)
++            return _Process(with_stdout=kwargs.get("stdout") is not None)
++
++        with mock.patch("wfd.media.wlroots.shutil.which", return_value="/usr/bin/gpu-screen-recorder"), \
++             mock.patch("wfd.media.wlroots._detect_audio_monitor", return_value="monitor"), \
++             mock.patch("wfd.media.wlroots.subprocess.Popen", side_effect=popen), \
++             mock.patch("wfd.media.wlroots.time.sleep"):
++            pipeline._start_desktop_gpu_screen_recorder()
++
++        capture, ffmpeg = commands
++        video_options = capture[capture.index("-ffmpeg-video-opts") + 1]
++        self.assertIn("level=40;", video_options)
++        self.assertEqual(ffmpeg[ffmpeg.index("-c:v") + 1], "libx264")
++        self.assertEqual(ffmpeg[ffmpeg.index("-level:v") + 1], "4.0")
++        self.assertNotIn("-vaapi_device", ffmpeg)
++
++    def test_1080p_on_a_16_by_9_panel_stays_a_single_encode(self):
++        config = WFDMediaConfig(
++            monitor=SimpleNamespace(name="DP-2", width=1920, height=1080),
++            output_resolution="1920x1080",
++            fps=60,
++            bitrate="14M",
++            no_audio=True,
++            capture_backend="gpu-screen-recorder",
++            video_encoder="vaapi",
++        )
++        pipeline = WFDMediaPipeline(
++            config, tv_ip="192.168.49.2", local_ip="192.168.49.1", sink_rtp_port=19000,
++        )
++        commands = []
++
++        def popen(command, *args, **kwargs):
++            commands.append(command)
++            return _Process(with_stdout=kwargs.get("stdout") is not None)
++
++        with mock.patch("wfd.media.wlroots.shutil.which", return_value="/usr/bin/gpu-screen-recorder"), \
++             mock.patch("wfd.media.wlroots._detect_audio_monitor", return_value="monitor"), \
++             mock.patch("wfd.media.wlroots.subprocess.Popen", side_effect=popen), \
++             mock.patch("wfd.media.wlroots.time.sleep"):
++            pipeline._start_desktop_gpu_screen_recorder()
++
++        capture, ffmpeg = commands
++        self.assertEqual(capture[capture.index("-s") + 1], "1920x1080")
++        self.assertIn("level=42;", capture[capture.index("-ffmpeg-video-opts") + 1])
++        self.assertEqual(ffmpeg[ffmpeg.index("-c:v") + 1], "copy")
++        self.assertNotIn("-vf", ffmpeg)
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+-- 
+2.43.0
+

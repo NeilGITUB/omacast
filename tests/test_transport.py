@@ -14,6 +14,7 @@ import tempfile
 from unittest.mock import Mock, patch
 
 from omarchy_cast.telemetry import MAX_PROCESS_DESCRIPTORS, MAX_SYSFS_INTERFACE_ENTRIES
+from omarchy_cast.engine import build_launch_plan
 from omarchy_cast.transport import CAPTURE_START_TIMEOUT_SECONDS, CONNECT_TIMEOUT_SECONDS, GUARD_LEASE_SECONDS, MAX_GUARD_DIAGNOSTIC_BYTES, RECEIVER_DISCONNECT_GRACE_SECONDS, SUPPLICANT_GROUP_TIMEOUT_SECONDS, DisabledTransportAdapter, FakeTransportAdapter, GuardedTransportAdapter, SessionLease, TransportDisabled, TransportError, _BoundedPipeDrain, _P2PGroupLiveness, validate_transport_plan
 
 
@@ -50,6 +51,26 @@ def executable_plan_fixture() -> dict[str, object]:
 
 
 class TransportTest(unittest.TestCase):
+    def test_hd1080_plan_matches_the_reconstructed_command_and_safe_stays_720p(self) -> None:
+        host = {
+            "schemaVersion": 1,
+            "checks": [{"name": name, "status": "ok"} for name in ("fluxcast", "nmcli", "gpu-screen-recorder", "ffmpeg")],
+            "wifiLinks": [{"interface": "wlan42", "connected": True, "frequency_mhz": 2412}],
+            "monitors": [{"name": "eDP-1", "focused": True}],
+            "defaultSink": "sink",
+            "renderNodes": ["/dev/dri/renderD128"],
+        }
+        hd = build_launch_plan(host, peer="00:11:22:33:44:55", mode="mirror", profile="hd1080")
+        validate_transport_plan(hd)
+        self.assertEqual(hd["command"][hd["command"].index("--output-res") + 1], "1920x1080")
+        slow = build_launch_plan(host, peer="00:11:22:33:44:55", mode="mirror", profile="hd1080p30")
+        validate_transport_plan(slow)
+        validate_transport_plan(plan())
+        rejected = build_launch_plan(host, peer="00:11:22:33:44:55", mode="mirror", profile="hd1080")
+        rejected["profile"] = dict(rejected["profile"])
+        rejected["profile"]["bitrateMbps"] = 7
+        with self.assertRaisesRegex(TransportError, "unsupported profile"):
+            validate_transport_plan(rejected)
     def test_guard_stderr_is_continuously_drained_with_fixed_retention(self) -> None:
         read_descriptor, write_descriptor = os.pipe()
         drain = _BoundedPipeDrain(os.fdopen(read_descriptor, "rb", buffering=0))

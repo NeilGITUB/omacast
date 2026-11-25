@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Add local `hd1080` (1920x1080p60) and `hd1080p30` profiles. Safe 720p60
+  stays the default. 1080p60 falls back to 1080p30 when the sink advertises
+  that mode and not 60. A 16:10 panel is scaled to 1728x1080 and padded to
+  1920x1080. Companion revision 92 and engine API 4 carry the capture change;
+  engine API 3 is rejected.
+- Keep older Panasonic VIERA sets that omit the WFD information element and
+  advertise a `VIERA_` name. They are treated as primary sinks on RTSP port
+  7236.
+- LPCM 48 kHz audio remains a follow-up. FluxCast only offers it to Microsoft
+  peers, and that muxer is not on the GPU Screen Recorder path.
+
 ## 0.1.7 — 2026-09-09
 
 - Render the five button shortcut labels as plain text so Omarchy 4.0.2 and

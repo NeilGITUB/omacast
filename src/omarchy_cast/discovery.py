@@ -165,9 +165,14 @@ GUARD_VERSION_CONTRACT = {
 ENGINE_CONTRACT = {
     "schemaVersion": 1,
     "kind": "omacast-engine-contract",
-    "apiRevision": 3,
+    "apiRevision": 4,
     "capture": "gpu-screen-recorder",
     "profile": {"width": 1280, "height": 720, "fps": 60, "bitrateMbps": 7},
+    "profiles": [
+        {"id": "safe", "width": 1280, "height": 720, "fps": 60, "bitrateMbps": 7},
+        {"id": "hd1080", "width": 1920, "height": 1080, "fps": 60, "bitrateMbps": 14},
+        {"id": "hd1080p30", "width": 1920, "height": 1080, "fps": 30, "bitrateMbps": 8},
+    ],
     "network": {
         "backend": "supplicant",
         "mode": "connect",
@@ -232,7 +237,7 @@ def _engine_capabilities(runner: Runner) -> dict[str, object]:
         try:
             payload = json.loads(result.stdout)
             validate_json_budget(
-                payload, max_depth=4, max_nodes=40,
+                payload, max_depth=4, max_nodes=64,
                 max_collection_items=12, max_string_chars=64,
             )
         except (json.JSONDecodeError, BoundError, RecursionError):

@@ -57,6 +57,8 @@ class CliTest(unittest.TestCase):
         parser = build_parser()
         self.assertEqual(parser.parse_args(["connect", "--peer", "tv-01"]).mode, "mirror")
         self.assertEqual(parser.parse_args(["connect", "--peer", "tv-01"]).profile, "safe")
+        self.assertEqual(parser.parse_args(["connect", "--peer", "tv-01", "--profile", "hd1080"]).profile, "hd1080")
+        self.assertEqual(parser.parse_args(["connect", "--peer", "tv-01", "--profile", "hd1080p30"]).profile, "hd1080p30")
         for arguments in (
             ["connect", "--peer", "tv-01", "--mode", "extend"],
             ["connect", "--peer", "tv-01", "--profile", "sports"],

@@ -53,6 +53,7 @@ Panel {
   property bool pairingLaunch: false
   property bool retryPairingAfterRecovery: false
   property string networkBackend: "direct"
+  property string qualityProfile: "safe"
 
   readonly property string phase: String(session.phase || "idle")
   readonly property bool sessionActive: ["checking", "discovering", "preparing", "connecting", "streaming", "stopping", "recovering"].indexOf(phase) >= 0
@@ -373,7 +374,7 @@ Panel {
   function sourceSummary() {
     var output = monitor()
     if (!output) return "Desktop source unavailable"
-    return output.name + " · mirror · 720p60 with audio"
+    return output.name + " · mirror · " + qualityLabel() + " with audio"
   }
 
   function heroTitle() {
@@ -509,6 +510,23 @@ Panel {
     } else if (!scanRunning) {
       startScan()
     }
+  }
+
+  function qualityLabel() {
+    if (qualityProfile === "hd1080") return "1080p60"
+    if (qualityProfile === "hd1080p30") return "1080p30"
+    return "720p60"
+  }
+
+  function cycleQualityProfile() {
+    if (sessionBusy || needsRecovery) return
+    qualityProfile = qualityProfile === "safe" ? "hd1080" : qualityProfile === "hd1080" ? "hd1080p30" : "safe"
+    message = qualityProfile === "hd1080"
+      ? "1080p60 selected. If this TV accepts 1080p30 but not 60, the cast uses 30."
+      : qualityProfile === "hd1080p30"
+        ? "1080p30 selected."
+        : "Safe 720p60 selected."
+    requestPlan()
   }
 
   function toggleNetworkBackend() {
@@ -921,7 +939,7 @@ Panel {
   }
   Process {
     id: planProc
-    command: [root.controllerPath, "plan", "--peer", root.receiverId, "--mode", "mirror", "--profile", "safe", "--backend", root.networkBackend]
+    command: [root.controllerPath, "plan", "--peer", root.receiverId, "--mode", "mirror", "--profile", root.qualityProfile, "--backend", root.networkBackend]
     stdout: BoundedCollector { id: planOutput }
     stderr: DiscardCollector {}
     onRunningChanged: if (running) planOutput.reset()
@@ -975,7 +993,7 @@ Panel {
   }
   Process {
     id: connectProc
-    command: [root.controllerPath, "start", "--peer", root.pendingReceiverId, "--mode", "mirror", "--profile", "safe", "--backend", root.networkBackend]
+    command: [root.controllerPath, "start", "--peer", root.pendingReceiverId, "--mode", "mirror", "--profile", root.qualityProfile, "--backend", root.networkBackend]
       .concat(root.pairingLaunch ? ["--pairing-pin-stdin"] : [])
     stdinEnabled: root.pairingLaunch
     stdout: BoundedCollector { id: connectOutput }
@@ -1132,6 +1150,8 @@ Panel {
           root.systemReady() ? root.startScan() : root.refresh()
         if ((text === "b" || text === "B") && !root.sessionBusy && !root.needsRecovery)
           root.toggleNetworkBackend()
+        if ((text === "p" || text === "P") && !root.sessionBusy && !root.needsRecovery)
+          root.cycleQualityProfile()
       }
 
       Flickable {
@@ -1183,6 +1203,21 @@ Panel {
             spacing: Style.space(10)
 
             InfoPair { label: "Source"; value: root.sourceSummary() }
+            Button {
+              width: parent.width
+              text: root.qualityLabel() + " (P)"
+              tooltipText: root.qualityProfile === "safe"
+                ? "Safe · 1280×720 at 60 fps. Press P to try 1080p."
+                : root.qualityProfile === "hd1080"
+                  ? "1920×1080 at 60 fps, with 1080p30 if the TV refuses 60. A 16:10 panel is padded, not stretched."
+                  : "1920×1080 at 30 fps. Press P to return to Safe 720p60."
+              enabled: !root.sessionBusy
+              bordered: true
+              selected: root.qualityProfile !== "safe"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.cycleQualityProfile()
+            }
             InfoPair { label: "System"; value: root.readinessSummary() }
 
             Button {

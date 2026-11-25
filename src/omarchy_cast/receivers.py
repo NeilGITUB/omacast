@@ -196,6 +196,11 @@ class FluxCastReceiverDiscovery:
                 # printers and source-only phones. Only peers whose WFD Device
                 # Information identifies a sink are valid cast targets.
                 wfd_info = _wfd_device_info(details)
+                # Older Panasonic VIERA sets join P2P discovery without a WFD
+                # information element. A VIERA_ name is a primary sink on the
+                # standard RTSP port; advertised WFD data still wins.
+                if wfd_info is None and bounded_text(getattr(peer, "name", ""), limit=120).strip().upper().startswith("VIERA_"):
+                    wfd_info = (0x0011, 7236, 50)
                 if wfd_info is None or (wfd_info[0] & 0x03) not in {1, 2, 3}:
                     continue
                 try:

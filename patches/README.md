@@ -7,8 +7,8 @@ reviewable without hiding the changes in a private fork.
 
 ## Production
 
-`production/series` is the sole build authority. Its 53 ordered patches cover
-eight parts of the receiver-tested path:
+`production/series` is the sole build authority. Its ordered patches cover
+the receiver-tested path, including patch 62 for the local 1080p profiles:
 
 - Wi-Fi Direct and WFD negotiation: patches 1–2 and 5.
 - Hyprland, VAAPI, GPU Screen Recorder, and synchronized audio capture:
@@ -53,6 +53,9 @@ eight parts of the receiver-tested path:
   58.
 - Explicit verified sink and local source addresses in the RTSP transport
   selection: patch 59.
+- Local 1080p60/1080p30 launches, a 1080p30 fallback when that is the mode the
+  sink actually advertises, and 16:10 letterboxing to a true 1920x1080 frame:
+  patch 62. Safe 720p capture is unchanged.
 
 The patches are intentionally atomic. Package builds apply them with `git am`,
 run FluxCast's tests, and fail if the pinned base or series no longer applies

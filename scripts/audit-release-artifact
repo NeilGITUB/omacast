@@ -213,9 +213,14 @@ actual = json.loads(sys.argv[1])
 expected = {
     "schemaVersion": 1,
     "kind": "omacast-engine-contract",
-    "apiRevision": 3,
+    "apiRevision": 4,
     "capture": "gpu-screen-recorder",
     "profile": {"width": 1280, "height": 720, "fps": 60, "bitrateMbps": 7},
+    "profiles": [
+        {"id": "safe", "width": 1280, "height": 720, "fps": 60, "bitrateMbps": 7},
+        {"id": "hd1080", "width": 1920, "height": 1080, "fps": 60, "bitrateMbps": 14},
+        {"id": "hd1080p30", "width": 1920, "height": 1080, "fps": 30, "bitrateMbps": 8},
+    ],
     "network": {"backend": "supplicant", "mode": "connect", "guardedSessionRequired": True},
     "telemetry": {"controllerDescriptorsRequired": True},
     "discovery": {"progressiveSnapshots": True},

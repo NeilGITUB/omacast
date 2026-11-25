@@ -18,10 +18,11 @@ from uuid import uuid4
 from .bounds import BoundError, open_private_directory, open_user_state_root, read_bounded_regular_file, validate_json_budget
 from .state import SessionLock, StateError, _open_session_runtime_descriptor, idle_state, read_state, transition, write_state
 from .telemetry import cleanup_live_telemetry, remove_archived_telemetry
+from .engine import PROFILES as PROFILE_TABLE
 from .transport import TransportAdapter, TransportError, TransportResult, result_payload, validate_test_transport_plan, validate_transport_plan
 
 
-PROFILES = frozenset({"safe"})
+PROFILES = frozenset(PROFILE_TABLE)
 MODES = frozenset({"mirror"})
 SOURCES = frozenset({"display"})
 _PEER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")

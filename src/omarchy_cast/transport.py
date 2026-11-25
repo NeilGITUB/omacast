@@ -16,6 +16,7 @@ import threading
 import time
 from typing import Any, Callable, Mapping, Protocol
 
+from .engine import PROFILES
 from .guard import GuardError, GuardRequest, prepare_command, read_guard_status, validate_helper_result
 from .identity import receiver_address
 from .pairing import validate_pairing_pin
@@ -309,6 +310,19 @@ class SessionLease:
                 self._directory_descriptor = None
 
 
+def _matching_profile(profile: object) -> dict[str, int | str] | None:
+    """Return the one supported profile table entry that matches exactly."""
+    if not isinstance(profile, Mapping):
+        return None
+    for candidate in PROFILES.values():
+        if set(profile) == set(candidate) and all(
+            type(profile.get(key)) is type(value) and profile.get(key) == value
+            for key, value in candidate.items()
+        ):
+            return candidate
+    return None
+
+
 def validate_transport_plan(plan: Mapping[str, Any], *, executable: bool = False) -> None:
     """Require the exact independently reconstructed supported FluxCast plan."""
     command = plan.get("command")
@@ -325,11 +339,8 @@ def validate_transport_plan(plan: Mapping[str, Any], *, executable: bool = False
         raise TransportError("transport plan has an unexpected execution permission")
     profile = plan.get("profile")
     selection = plan.get("selection")
-    expected_profile = {"label": "Safe", "width": 1280, "height": 720, "fps": 60, "bitrateMbps": 7}
-    if not isinstance(profile, Mapping) or set(profile) != set(expected_profile) or any(
-        type(profile.get(key)) is not type(value) or profile.get(key) != value
-        for key, value in expected_profile.items()
-    ):
+    expected_profile = _matching_profile(profile)
+    if expected_profile is None:
         raise TransportError("transport plan has an unsupported profile")
     expected_selection = {"peer", "mode", "source", "networkBackend", "wifiInterface", "wifiFrequencyMhz", "p2pFrequencyMhz", "monitor", "audioSource", "videoEncoder"}
     if not isinstance(selection, Mapping) or set(selection) != expected_selection:
@@ -363,8 +374,10 @@ def validate_transport_plan(plan: Mapping[str, Any], *, executable: bool = False
     if type(p2p_frequency) is not int or p2p_frequency != expected_p2p_frequency:
         raise TransportError("transport plan P2P frequency does not match its Wi-Fi selection")
     expected_command = [
-        "fluxcast", "--protocol", "wfd", "--output-res", "1280x720",
-        "--fps", "60", "--bitrate", "7M", "--wfd-video-encoder", encoder,
+        "fluxcast", "--protocol", "wfd",
+        "--output-res", f"{expected_profile['width']}x{expected_profile['height']}",
+        "--fps", str(expected_profile["fps"]), "--bitrate", f"{expected_profile['bitrateMbps']}M",
+        "--wfd-video-encoder", encoder,
         "--wfd-p2p-backend", "supplicant", "--wfd-supplicant-mode", "connect",
         "--wfd-peer", peer, "--wfd-interface", interface, "--wfd-timeout", "15",
         "--wfd-supplicant-frequency", str(p2p_frequency), "--wfd-no-firewall",

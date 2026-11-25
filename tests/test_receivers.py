@@ -151,6 +151,37 @@ class ReceiverDiscoveryTest(unittest.TestCase):
         self.assertEqual([[receiver.id for receiver in snapshot] for snapshot in snapshots], [[], ["02:00:00:00:00:01"]])
         self.assertEqual([receiver.id for receiver in final], ["02:00:00:00:00:01"])
 
+    def test_viera_without_a_wfd_ie_is_a_primary_sink(self) -> None:
+        def scanner(*, interface: str | None, timeout: int) -> list[SimpleNamespace]:
+            del interface, timeout
+            return [
+                SimpleNamespace(address="02:00:00:00:00:21", name="VIERA_TX-65DX902B", details="manufacturer=Panasonic"),
+                SimpleNamespace(address="02:00:00:00:00:22", name="viera_lounge", details=""),
+                SimpleNamespace(address="02:00:00:00:00:23", name="VIERA", details=""),
+                SimpleNamespace(address="02:00:00:00:00:24", name="MYVIERA_SET", details=""),
+                SimpleNamespace(address="02:00:00:00:00:25", name="Living Room", details=""),
+                SimpleNamespace(
+                    address="02:00:00:00:00:26", name="VIERA_SOURCE",
+                    details="wfd_dev_info=0x00101c4400c8",
+                ),
+                SimpleNamespace(
+                    address="02:00:00:00:00:27", name="VIERA_ADVERTISED",
+                    details="wfd_dev_info=0x00121c440064",
+                ),
+            ]
+
+        payload = discovery_payload(FluxCastReceiverDiscovery(scanner=scanner))
+        by_id = {receiver["id"]: receiver for receiver in payload["receivers"]}
+        self.assertEqual(set(by_id), {"02:00:00:00:00:21", "02:00:00:00:00:22", "02:00:00:00:00:27"})
+        for receiver_id in ("02:00:00:00:00:21", "02:00:00:00:00:22"):
+            self.assertEqual(by_id[receiver_id]["wfd_role"], "primary-sink")
+            self.assertEqual(by_id[receiver_id]["rtsp_port"], 7236)
+            self.assertEqual(by_id[receiver_id]["throughput_mbps"], 50)
+            self.assertEqual(by_id[receiver_id]["kind"], "wfd-display")
+        self.assertEqual(by_id["02:00:00:00:00:27"]["wfd_role"], "secondary-sink")
+        self.assertEqual(by_id["02:00:00:00:00:27"]["rtsp_port"], 7236)
+        self.assertEqual(by_id["02:00:00:00:00:27"]["throughput_mbps"], 100)
+
     def test_fluxcast_adapter_rejects_peers_without_a_valid_sink_role(self) -> None:
         def scanner(*, interface: str | None, timeout: int) -> list[SimpleNamespace]:
             del interface, timeout

@@ -626,15 +626,28 @@ and upstream synchronization independent from the QML plugin.
 
 ### 3.5 Capture and quality contract
 
-Ship only the receiver-validated Safe profile:
+Safe remains the default and the only broadly receiver-validated profile.
+This fork also offers two local 1080p profiles. They are not a claim that
+every sink accepts them.
 
-| Profile | Initial target | Purpose |
+| Profile | Target | Purpose |
 | --- | --- | --- |
-| Safe | 1280x720p60, VAAPI preferred | Establish compatibility and recovery |
+| Safe (default) | 1280x720p60 at 7 Mbps, VAAPI preferred | Established compatibility and recovery |
+| hd1080 | 1920x1080p60 at 14 Mbps | Higher picture; falls back to 1080p30 when the sink advertises 1080p30 and not 1080p60 |
+| hd1080p30 | 1920x1080p30 at 8 Mbps | Explicit 30 fps when a sink refuses 60 |
+
+A 16:10 panel, such as 2880x1800, is scaled to 1728x1080 and padded to a true
+1920x1080 frame. Safe 720p capture is unchanged. H.264 stays constrained
+baseline: level 3.2 at 720p60, 4.2 at 1080p60, and 4.0 at 1080p30. The CEA
+mode bit follows the negotiated mode (bit 8 for 1080p60, bit 7 for 1080p30).
 
 The controller must distinguish the requested, advertised, negotiated, and
 actual encoder modes. It should fall back only with a visible explanation.
 Never claim a mode that the receiver did not negotiate.
+
+LPCM at 48 kHz is a follow-up, not part of these profiles. FluxCast offers
+LPCM only for Microsoft peers, and that muxer is a stub on the GPU Screen
+Recorder path. Desktop audio remains AAC.
 
 Tune and measure:
 

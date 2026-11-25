@@ -3585,3 +3585,24 @@ These short two-receiver runs accept compatibility and the targeted pacing
 candidate. They do not replace the deferred long soak and repeated failure-
 injection gates required for a later reliability release, nor do they prove
 that every possible shared-radio traffic pattern is eliminated.
+
+## 2026-11-25 — Local 1080p profiles and VIERA discovery
+
+The Safe 720p60 profile remains the default. This fork adds `hd1080`
+(1920x1080p60, 14 Mbps) and `hd1080p30` (1920x1080p30, 8 Mbps) without a live
+receiver run. GPU Screen Recorder's `-s` limit preserves aspect ratio by
+shrinking the frame, so a 2880x1800 panel becomes 1728x1080. The 1080p path
+pads that picture back to 1920x1080 (96 px each side). Safe 720p capture is
+left on the previous single-encode path. H.264 levels are 4.2 for 1080p60 and
+4.0 for 1080p30; the CEA bit is 8 or 7 to match. If a sink advertises 1080p30
+and not 1080p60, negotiation selects 30 and capture follows that mode. Sinks
+that omit both 1080p bits still get the requested mode forced, which is the
+existing under-advertisement behavior.
+
+Older Panasonic VIERA sets that advertise no WFD IE and whose peer name starts
+with `VIERA_` are recorded as primary sinks on RTSP port 7236. An advertised
+WFD IE still wins. This is a discovery exception, not a claim that 1080p has
+been accepted on a TX-65DX902B.
+
+LPCM 48 kHz was not added. FluxCast offers that codec only for Microsoft
+peers, and the LPCM muxer is not part of the GPU Screen Recorder pipeline.

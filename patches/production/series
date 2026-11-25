@@ -53,3 +53,4 @@
 0059-Identify-WFD-transport-endpoints-explicitly.patch
 0060-Bound-WFD-encoder-access-units.patch
 0061-Prioritize-Miracast-RTP-on-shared-Wi-Fi.patch
+0062-Add-1080p-profiles-with-16-by-10-letterbox.patch

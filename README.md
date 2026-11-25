@@ -13,7 +13,9 @@ Super+Alt+C  →  choose a TV  →  Enter
 ## Features
 
 - Direct Wi-Fi Display casting with no cloud service or receiver app.
-- A receiver-tested 1280×720 at 60 fps profile with audio.
+- A receiver-tested 1280×720 at 60 fps profile with audio, still the default.
+- Optional 1080p60 and 1080p30 profiles. 1080p60 falls back to 1080p30 when
+  the TV advertises 30 but not 60. A 16:10 panel is padded to 1920×1080.
 - Nearby receiver discovery using the advertised Wi-Fi Display sink role.
 - Clear idle, connecting, streaming, and recovery states in the bar.
 - Optional Nerd Mode with frame rate, load, RTP, queue, radio, and timing data.
@@ -34,31 +36,30 @@ Super+Alt+C  →  choose a TV  →  Enter
   one older Samsung WFD sink, but broad receiver compatibility is not claimed.
 
 Broad receiver and hardware support is not claimed yet. Omacast currently
-ships desktop mirroring only; window casting and alternate quality modes are
-not part of version 0.1.7.
+ships desktop mirroring only. Window casting is not part of version 0.1.7.
+The Safe 720p profile remains the default. 1080p is a local option and is
+not a general receiver-validation claim.
 
 ## Install on Omarchy
 
 Omacast has two parts: the bar plugin and an Arch companion package containing
 the pinned FluxCast engine and guarded networking helper.
 
-Download the package and `SHA256SUMS` from the
-[v0.1.7 release](https://github.com/hardiepiennar/omacast/releases/tag/v0.1.7),
-then verify and install it:
+This fork's plugin requires companion revision 92 (engine API 4, guard API 17).
+Build that package from the same checkout. A previously installed v0.1.7
+package is engine API 3 and is rejected until it is replaced:
 
 ```bash
-sha256sum --check SHA256SUMS
-gh attestation verify fluxcast-omarchy-cast-*.pkg.tar.zst --repo hardiepiennar/omacast
-sudo pacman -U ./fluxcast-omarchy-cast-*.pkg.tar.zst
+cd packaging/arch
+makepkg -si
 ```
 
-Version 0.1.7 keeps engine API 3, guard API 17, and companion revision 91.
-Existing users with the v0.1.6 companion package do not need to reinstall it.
-
-Install and enable the plugin:
+Install or update the plugin from this fork. If it is already present at
+`~/.config/omarchy/plugins/hardie.omarchy-cast`, pull this branch there and
+reload the shell. A fresh install is:
 
 ```bash
-omarchy plugin add https://github.com/hardiepiennar/omacast --enable
+omarchy plugin add https://github.com/NeilGITUB/omacast --enable
 ```
 
 ### Bind Super+Alt+C
@@ -86,7 +87,9 @@ The bar icon works without this optional keybinding.
 2. Press **Super+Alt+C** or click the Omacast bar icon.
 3. Choose the TV with **↑/↓** and press **Enter**, or click it.
 4. Press **N** for Nerd Mode, **Q** to cancel or stop, and **R** to rescan when
-   idle.
+   idle. Press **P** before connecting to cycle Safe 720p60, 1080p60, and
+   1080p30. The same choice is `--profile safe|hd1080|hd1080p30` on
+   `plan`, `start`, and `connect`. Safe is the default.
 
 Mirroring exposes everything visible on the selected display, including
 notifications. Omacast does not bypass DRM; protected browser video may appear

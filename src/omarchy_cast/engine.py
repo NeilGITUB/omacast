@@ -13,7 +13,10 @@ class LaunchPlanError(ValueError):
 
 PROFILES: dict[str, dict[str, int | str]] = {
     "safe": {"label": "Safe", "width": 1280, "height": 720, "fps": 60, "bitrateMbps": 7},
+    "hd1080": {"label": "1080p", "width": 1920, "height": 1080, "fps": 60, "bitrateMbps": 14},
+    "hd1080p30": {"label": "1080p30", "width": 1920, "height": 1080, "fps": 30, "bitrateMbps": 8},
 }
+PROFILE_CHOICES = tuple(PROFILES)
 SOURCES = frozenset({"display"})
 
 

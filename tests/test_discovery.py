@@ -164,6 +164,39 @@ class DiscoveryTest(unittest.TestCase):
         self.assertIn("engine-incompatible", codes)
         self.assertIn("helper-incompatible", codes)
 
+    def test_readiness_rejects_the_safe_only_engine_contract(self) -> None:
+        previous = {
+            "schemaVersion": 1,
+            "kind": "omacast-engine-contract",
+            "apiRevision": 3,
+            "capture": "gpu-screen-recorder",
+            "profile": {"width": 1280, "height": 720, "fps": 60, "bitrateMbps": 7},
+            "network": {"backend": "supplicant", "mode": "connect", "guardedSessionRequired": True},
+            "telemetry": {"controllerDescriptorsRequired": True},
+            "discovery": {"progressiveSnapshots": True},
+            "pairing": {"receiverPinDescriptor": True},
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            helpers = root / "helpers"
+            helpers.mkdir()
+            self.install_fake_helpers(helpers)
+
+            def old_engine(args, *, timeout=5.0):
+                if args[0] == "fluxcast":
+                    return CommandResult(tuple(args), 0, json.dumps(previous), "")
+                return self.ready_runner(args, timeout=timeout)
+
+            snapshot = discover_host(
+                runner=old_engine,
+                render_root=root / "dri",
+                guard_root=helpers,
+                command_finder=lambda name: f"/usr/bin/{name}",
+            )
+
+        self.assertFalse(snapshot["readiness"]["ready"])
+        self.assertIn("engine-incompatible", {issue["code"] for issue in snapshot["readiness"]["issues"]})
+
     def test_readiness_rejects_old_alternate_capture_selectors(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

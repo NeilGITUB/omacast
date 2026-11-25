@@ -85,6 +85,21 @@ class EngineTest(unittest.TestCase):
             with self.subTest(peer=peer), self.assertRaisesRegex(LaunchPlanError, "MAC address"):
                 build_launch_plan(snapshot(), peer=peer, mode="mirror", profile="safe")
 
+    def test_hd1080_profile_requests_1080p60_and_keeps_safe_as_the_other_path(self) -> None:
+        plan = build_launch_plan(snapshot(), peer="AA:BB:CC:DD:EE:FF", mode="mirror", profile="hd1080")
+        self.assertEqual(plan["profile"], {"label": "1080p", "width": 1920, "height": 1080, "fps": 60, "bitrateMbps": 14})
+        resolution = plan["command"].index("--output-res")
+        self.assertEqual(plan["command"][resolution + 1], "1920x1080")
+        self.assertEqual(plan["command"][plan["command"].index("--fps") + 1], "60")
+        self.assertEqual(plan["command"][plan["command"].index("--bitrate") + 1], "14M")
+        slower = build_launch_plan(snapshot(), peer="AA:BB:CC:DD:EE:FF", mode="mirror", profile="hd1080p30")
+        self.assertEqual(slower["profile"]["fps"], 30)
+        self.assertEqual(slower["command"][slower["command"].index("--fps") + 1], "30")
+        self.assertEqual(slower["command"][slower["command"].index("--bitrate") + 1], "8M")
+        safe = build_launch_plan(snapshot(), peer="AA:BB:CC:DD:EE:FF", mode="mirror", profile="safe")
+        self.assertEqual(safe["command"][safe["command"].index("--output-res") + 1], "1280x720")
+        self.assertEqual(safe["command"][safe["command"].index("--bitrate") + 1], "7M")
+
     def test_safe_profile_targets_receiver_proven_720p(self) -> None:
         plan = build_launch_plan(snapshot(), peer="AA:BB:CC:DD:EE:FF", mode="mirror", profile="safe")
         self.assertEqual(plan["profile"]["fps"], 60)
